@@ -1,0 +1,2 @@
+import wiki from 'wikipedia'
+
