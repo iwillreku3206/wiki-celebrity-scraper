@@ -1,15 +1,20 @@
 import WBK from "wikibase-sdk";
-import type { Person } from "./types";
+import type { Person, Image } from "./types";
 import { Cookie, CookieMap } from "bun";
 
-const user_agent = "wiki-celebrity-scraper/0.0.0 (rinaldochenglee@gmail.com) bun/1.3.5"
+const user_agent =
+	"wiki-celebrity-scraper/0.0.0 (rinaldochenglee@gmail.com) bun/1.3.5";
+
+function sleep(ms: number) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function scrape_wikidata(): Promise<Person[]> {
 	const wdk = WBK({
-		instance: 'https://www.wikidata.org',
-		sparqlEndpoint: 'https://query.wikidata.org/sparql'
-	})
-
+		instance: "https://www.wikidata.org",
+		sparqlEndpoint: "https://query.wikidata.org/sparql",
+	});
+	// const limit = 10;
 	const url = wdk.sparqlQuery(`
 SELECT DISTINCT ?item ?itemLabel ?genderLabel ?birthdate ?image WHERE {
   SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en,mul". }
@@ -47,22 +52,40 @@ SELECT DISTINCT ?item ?itemLabel ?genderLabel ?birthdate ?image WHERE {
       }
     }
   }
-} LIMIT 1
-									`)
+} `);
+	//   LIMIT ${limit}
+	// `);
 
 	const response = await fetch(url, {
 		headers: {
-			'user-agent': user_agent
-		}
-	})
+			"user-agent": user_agent,
+		},
+	});
 
-	const payload = await response.text()
+	const retval: Person[] = [];
 
-	return []
+	const payload = await response.json();
+	for (const binding of payload.results.bindings) {
+		const person = {} as Person;
+		person.name = binding.itemLabel.value;
+		person.gender = binding.genderLabel?.value;
+		person.birthdate = binding.birthdate?.value
+			? new Date(binding.birthdate.value)
+			: undefined;
+		person.wiki_url = binding.item.value;
+		const item = person.wiki_url.split("/").pop()!;
+		person.images = [
+			{ url: binding.image.value },
+			...(await scrape_images_from_item(item)),
+		];
+		retval.push(person);
+		await sleep(500);
+	}
+	return retval;
 }
 
-async function scrape_images_from_item(item: string) {
-	const sparqlEndpoint = 'https://qlever.dev/api/wikimedia-commons'
+async function scrape_images_from_item(item: string): Promise<Image[]> {
+	const sparqlEndpoint = "https://qlever.dev/api/wikimedia-commons";
 
 	const query = `
 PREFIX wdt: <http://www.wikidata.org/prop/direct/>
@@ -72,32 +95,34 @@ PREFIX schema: <http://schema.org/>
 SELECT ?file ?image WHERE {
   ?file wdt:P180 wd:${item}.
   ?file schema:url ?image.
-}`
+}`;
 
 	if (!Bun.env.WIKIMEDIA_COOKIE) {
-		throw Error("No WIKIMEDIA_COOKIE set!")
+		throw Error("No WIKIMEDIA_COOKIE set!");
 	}
 
-	console.log('connecting to commons')
+	console.log("connecting to commons");
 
-	const jar = new CookieMap()
-	jar.set('wcqsOauth', Bun.env.WIKIMEDIA_COOKIE)
+	const jar = new CookieMap();
+	jar.set("wcqsOauth", Bun.env.WIKIMEDIA_COOKIE);
 
 	const response = await fetch(sparqlEndpoint, {
-		method: 'POST',
+		method: "POST",
 		body: query,
 		headers: {
-			'accept': 'application/json',
-			'content-type': 'application/sparql-query',
-			'user-agent': user_agent,
-			'cookie': jar.toSetCookieHeaders()
+			accept: "application/json",
+			"content-type": "application/sparql-query",
+			"user-agent": user_agent,
+			cookie: jar.toSetCookieHeaders(),
 		},
-		verbose: true
-	})
+		verbose: true,
+	});
 
-	const payload = JSON.stringify(await response.json(), null, 2)
+	const payload = await response.json();
+	// console.log(JSON.stringify(payload, null, 2))
 
-	console.log(payload)
-
-	return []
+	return payload.results.bindings.map((binding: any) => ({
+		url: binding.image.value,
+		caption: binding.file.value,
+	}));
 }
