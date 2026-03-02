@@ -58,12 +58,6 @@ SELECT DISTINCT ?item ?itemLabel ?genderLabel ?birthdate ?image WHERE {
 
 	const payload = await response.text()
 
-	console.log(payload)
-
-	console.log('===================')
-
-	scrape_images_from_item('Q24977370')
-
 	return []
 }
 
