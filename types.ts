@@ -9,4 +9,5 @@ export interface Person {
 	birthdate?: Date
 	wiki_url: string
 	images: Image[]
+	demographic: string
 }

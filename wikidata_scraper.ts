@@ -1,161 +1,133 @@
 import WBK from "wikibase-sdk";
 import type { Person, Image } from "./types";
-import { Cookie, CookieMap } from "bun";
+import { CookieMap } from "bun";
 import { writeFileSync } from "fs";
 
-const user_agent =
-	"wiki-celebrity-scraper/0.0.0 (rinaldochenglee@gmail.com) bun/1.3.5";
+const user_agent = "wiki-celebrity-scraper/0.0.1 (rinaldochenglee@gmail.com) bun/1.3.5";
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function sleep(ms: number) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const SEA_ENTITIES = [
+	{ id: "wd:Q928", label: "Philippines" },
+	{ id: "wd:Q252", label: "Indonesia" },
+	{ id: "wd:Q833", label: "Malaysia" },
+	{ id: "wd:Q869", label: "Thailand" },
+	{ id: "wd:Q881", label: "Vietnam" },
+	{ id: "wd:Q424", label: "Cambodia" },
+	{ id: "wd:Q819", label: "Laos" },
+	{ id: "wd:Q836", label: "Myanmar" },
+	{ id: "wd:Q334", label: "Singapore" },
+	{ id: "wd:Q921", label: "Brunei" },
+	{ id: "wd:Q574", label: "Timor-Leste" }
+];
 
-export async function scrape_wikidata(): Promise<Person[]> {
+export async function scrape_all_sea(): Promise<Person[]> {
 	const wdk = WBK({
 		instance: "https://www.wikidata.org",
 		sparqlEndpoint: "https://query.wikidata.org/sparql",
 	});
 
-	const url = wdk.sparqlQuery(`
-SELECT DISTINCT ?item ?itemLabel ?genderLabel ?birthdate ?image WHERE {
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en,mul". }
+	let allResults: Person[] = [];
+
+	for (const entity of SEA_ENTITIES) {
+		let offset = 0;
+		const limit = 200;
+		let hasMore = true;
+
+		while (hasMore) {
+			const sparql = `
+SELECT ?item ?itemLabel ?genderLabel ?birthdate ?image ?primaryTimestamp WHERE {
   {
-    SELECT DISTINCT ?item ?itemLabel ?gender ?birthdate ?image WHERE {
+    SELECT DISTINCT ?item ?gender ?birthdate ?image ?primaryTimestamp WHERE {
+      ?item wdt:P31 wd:Q5.
+      ?item wdt:P21 ?gender. 
+      ?item (wdt:P27|wdt:P172|wdt:P495) ${entity.id}.
       
-      {
-        ?item p:P27 ?statement0. 				  # P27: country of citizenship
-        ?statement0 (ps:P27/(wdt:P279*)) wd:Q928. # Q928: Philippines
+      # Primary Image + Timestamp logic in one block
+      ?item wdt:P18 ?image.
+      OPTIONAL {
+        ?imageFile schema:about ?image.
+        OPTIONAL { ?imageFile wdt:P571 ?inc. }
+        OPTIONAL { ?imageFile wdt:P585 ?pit. }
+        BIND(COALESCE(?inc, ?pit) AS ?primaryTimestamp)
       }
-      UNION
-      {
-        ?item p:P172 ?statement1. 					   # P172: ethnic group
-        ?statement1 (ps:P172/(wdt:P279*)) wd:Q1262011. # Q1262011: tagalog people
-      }
-      UNION
-      {
-        ?item p:P172 ?statement2. 					   # P172: ethnic group
-        ?statement2 (ps:P172/(wdt:P279*)) wd:Q4172847. # Q4172847: Filipinos
-      }
-      UNION
-      {
-        ?item p:P495 ?statement3. 				   # P495: ethnic group
-        ?statement3 (ps:P495/(wdt:P279*)) wd:Q928. # Q928: Philippines
-      }
-	  UNION
-      {
-        ?item p:P27 ?statement4. 				  # P27: ethnic group
-        ?statement4 (ps:P27/(wdt:P279*)) wd:Q833. # Q833: Malaysia
-      }
-      UNION
-      {
-        ?item p:P27 ?statement5. 				  # P27: ethnic group
-        ?statement5 (ps:P27/(wdt:P279*)) wd:Q252. # Q252: Indonesia
-      }
-      UNION
-      {
-        ?item p:P172 ?statement1. 					   # P172: ethnic group
-        ?statement1 (ps:P172/(wdt:P279*)) wd:Q142702.  # Q142702: malays
-      }
-      UNION
-      {
-        ?item p:P172 ?statement2. 					   # P172: ethnic group
-        ?statement2 (ps:P172/(wdt:P279*)) wd:Q4200853. # Q4200853: indonesians
-      }
-
-      ?item wdt:P18 ?image .
-	  
-	  OPTIONAL {
-      	?item wdt:P21 ?gender .
-	  }
-
-	  OPTIONAL {
-		?item wdt:P569 ?birthdate .
-	  }
-	  
-	  OPTIONAL {
-	  	?item wdt:P27 ?country .
-	  }
-	  
-	  OPTIONAL {
-	  	?item wdt:P495 ?countryOfOrigin . 
-	  }
+      OPTIONAL { ?item wdt:P569 ?birthdate. }
     }
+    LIMIT ${limit}
+    OFFSET ${offset}
   }
-}`);
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}`;
 
-	const response = await fetch(url, {
-		headers: {
-			"user-agent": user_agent,
-		},
-	});
+			try {
+				const url = wdk.sparqlQuery(sparql);
+				const response = await fetch(url, { headers: { "User-Agent": user_agent } });
+				const data = await response.json();
+				const bindings = data.results.bindings;
 
-	const retval: Person[] = [];
+				if (bindings.length === 0) {
+					hasMore = false;
+					break;
+				}
 
-	const payload = await response.json();
-	for (const binding of payload.results.bindings) {
-		const person = {} as Person;
-		person.wiki_url = binding.item.value;
-		person.name = binding.itemLabel.value;
-		person.gender = binding.genderLabel?.value;
-		person.citizenship = binding.countryLabel?.value;
-		person.countryOfOrigin = binding.countryOfOriginLabel?.value;
-		person.birthdate = binding.birthdate?.value
-			? new Date(binding.birthdate.value)
-			: undefined;
+				for (const b of bindings) {
+					const qid = b.item.value.split("/").pop()!;
 
-		const item = person.wiki_url.split("/").pop()!;
-		person.images = [
-			{ url: binding.image.value },
-			...(await scrape_images_from_item(item)),
-		];
-		retval.push(person);
-		if (retval.length % 100 == 0) {
-			writeFileSync(`people_${retval}.json`, JSON.stringify(retval, null, 2));
+					// const extraImages = await scrape_images_from_item(qid);
+
+					allResults.push({
+						wiki_url: b.item.value,
+						name: b.itemLabel.value,
+						gender: b.genderLabel.value,
+						matched_demographic: entity.label,
+						birthdate: b.birthdate?.value ? new Date(b.birthdate.value) : undefined,
+						images: [
+							{ url: b.image.value, timestamp: b.primaryTimestamp?.value || "Unknown" },
+							// ...extraImages
+						]
+					});
+				}
+
+				console.log(`[${entity.label}] Offset ${offset} complete. Total: ${allResults.length}`);
+				offset += limit;
+				await sleep(500);
+			} catch (e) {
+				console.error("Query timed out or failed. Reducing offset and retrying...");
+				await sleep(5000);
+			}
 		}
-		await sleep(500);
+		writeFileSync(`sea_data_${entity.label.toLowerCase()}.json`, JSON.stringify(allResults, null, 2));
 	}
-	return retval;
+	return allResults;
 }
 
-async function scrape_images_from_item(item: string): Promise<Image[]> {
+async function scrape_images_from_item(qid: string): Promise<Image[]> {
 	const sparqlEndpoint = "https://qlever.dev/api/wikimedia-commons";
-
 	const query = `
 PREFIX wdt: <http://www.wikidata.org/prop/direct/>
 PREFIX wd: <http://www.wikidata.org/entity/>
 PREFIX schema: <http://schema.org/>
-
-SELECT ?file ?image WHERE {
-  ?file wdt:P180 wd:${item}.
+SELECT DISTINCT ?image ?timestamp WHERE {
+  ?file wdt:P180 wd:${qid}.
   ?file schema:url ?image.
-}`;
+  OPTIONAL { ?file wdt:P571 ?i. }
+  OPTIONAL { ?file wdt:P585 ?p. }
+  BIND(COALESCE(?i, ?p) AS ?timestamp)
+} LIMIT 5`;
 
-	if (!Bun.env.WIKIMEDIA_COOKIE) {
-		throw Error("No WIKIMEDIA_COOKIE set!");
-	}
-
-	console.log("connecting to commons");
-
+	if (!Bun.env.WIKIMEDIA_COOKIE) return [];
 	const jar = new CookieMap();
 	jar.set("wcqsOauth", Bun.env.WIKIMEDIA_COOKIE);
 
-	const response = await fetch(sparqlEndpoint, {
-		method: "POST",
-		body: query,
-		headers: {
-			accept: "application/json",
-			"content-type": "application/sparql-query",
-			"user-agent": user_agent,
-			cookie: jar.toSetCookieHeaders(),
-		},
-		verbose: true,
-	});
-
-	const payload = await response.json();
-	// console.log(JSON.stringify(payload, null, 2))
-
-	return payload.results.bindings.map((binding: any) => ({
-		url: binding.image.value,
-		caption: binding.file.value,
-	}));
+	try {
+		const res = await fetch(sparqlEndpoint, {
+			method: "POST",
+			body: query,
+			headers: { "Content-Type": "application/sparql-query", "Cookie": jar.toSetCookieHeaders() }
+		});
+		const data = await res.json();
+		return data.results.bindings.map((b: any) => ({
+			url: b.image.value,
+			timestamp: b.timestamp?.value || "Unknown"
+		}));
+	} catch { return []; }
 }
