@@ -72,7 +72,7 @@ SELECT ?item ?itemLabel ?genderLabel ?birthdate ?image ?primaryTimestamp WHERE {
 				for (const b of bindings) {
 					const qid = b.item.value.split("/").pop()!;
 
-					// const extraImages = await scrape_images_from_item(qid);
+					const extraImages = await scrape_images_from_item(qid);
 
 					allResults.push({
 						wiki_url: b.item.value,
@@ -82,7 +82,7 @@ SELECT ?item ?itemLabel ?genderLabel ?birthdate ?image ?primaryTimestamp WHERE {
 						birthdate: b.birthdate?.value ? new Date(b.birthdate.value) : undefined,
 						images: [
 							{ url: b.image.value, timestamp: b.primaryTimestamp?.value || "Unknown" },
-							// ...extraImages
+							...extraImages
 						]
 					});
 				}
@@ -95,7 +95,7 @@ SELECT ?item ?itemLabel ?genderLabel ?birthdate ?image ?primaryTimestamp WHERE {
 				await sleep(5000);
 			}
 		}
-		writeFileSync(`sea_data_${entity.label.toLowerCase()}.json`, JSON.stringify(allResults, null, 2));
+		writeFileSync(`out/sea_data_${entity.label.toLowerCase()}.full.json`, JSON.stringify(allResults, null, 2));
 	}
 	return allResults;
 }
